@@ -1,190 +1,154 @@
 //+------------------------------------------------------------------+
 //|                                                  bridge_ea.mq5   |
-//|                              MT5 Test Bot — thin execution EA    |
+//|                    MT5 Test Bot — native socket bridge (no DLL)  |
 //+------------------------------------------------------------------+
 //|                                                                  |
-//|  Энэ EA-д ШИЙДВЭР ГАРГАХ ЛОГИК БАЙХГҮЙ.                           |
-//|  Бүх индикатор, signal, sizing — Python brain-д.                 |
+//|  MT5-ийн native Socket API ашиглана (build 2340+). DLL хэрэггүй,  |
+//|  mql-zmq хэрэггүй. EA нь TCP CLIENT, Python brain TCP SERVER.    |
 //|                                                                  |
-//|  Үүрэг:                                                           |
-//|  1) ZMQ-аар Python руу tick + heartbeat явуулах (libzmq.dll)      |
-//|  2) Python-аас irsen orders-ыг гүйцэтгэх                          |
-//|  3) Python-аас heartbeat алдагдсан үед бүх позицийг хаах          |
+//|  Wire format: line-based (\n delimiter), text only:               |
+//|    out (EA → brain):                                              |
+//|      tick|symbol=EURUSD|bid=1.10412|ask=1.10421|ts_ms=...         |
+//|      heartbeat|ts_ms=...|source=gateway                           |
+//|    in  (brain → EA):                                              |
+//|      order|client_id=...|symbol=EURUSD|side=buy|lots=0.10|        |
+//|              sl=1.0950|tp=1.1100|entry=1.1000                     |
+//|      flatten_all                                                  |
+//|      ping                                                         |
+//|    EA reply бүрт line:                                            |
+//|      ok|ticket=...|price=...                                      |
+//|      err|reason=...                                               |
 //|                                                                  |
-//|  Build:                                                           |
-//|    1. mql-zmq (https://github.com/dingmaotu/mql-zmq) суулга:      |
-//|       Include/Zmq, Library/Zmq.dll  →  MT5 data folder            |
-//|    2. Tools → Options → Expert Advisors:                          |
-//|         ☑ Allow algorithmic trading                               |
-//|         ☑ Allow DLL imports                                       |
+//|  HMAC-ийг simple авч хассан (loopback only). Шаардлагатай бол     |
+//|  string-н prefix-ээр нэмж болно.                                  |
+//|                                                                  |
+//|  Setup:                                                           |
+//|    1. Tools → Options → Expert Advisors:                          |
+//|       ☑ Allow algorithmic trading                                 |
+//|       ☑ Allow WebRequest for the following URLs:                  |
+//|          (URL биш, чөлөөтэй TCP — энэ check шаардахгүй)           |
+//|    2. (Энэ EA-д DLL imports check хэрэггүй!)                      |
 //|    3. F7 to compile.                                              |
-//|                                                                  |
-//|  Wire format (Python-тай адил):                                  |
-//|    JSON-ийн оронд эхлэхдээ зөвхөн PIPE-delimited string ашиглана  |
-//|    учир нь msgpack-ийг MQL5-д бичих нь хэт нийтлэг биш.           |
-//|    Format: "type|key1=val1|key2=val2|..."                         |
-//|    Жишээ: "tick|symbol=EURUSD|bid=1.10412|ask=1.10421|ts=170..."  |
-//|    HMAC-SHA256-ийг мөн bytes-ээр prepend хийнэ.                  |
-//|                                                                  |
-//|  ⚠ JSON/msgpack дэмжлэг нэмэхийн тулд хожим обновить — одоохондоо |
-//|    Python тал нэмэлт parser-тэй (bridge/transport.py-аас өөр код  |
-//|    хэрэгтэй, эсвэл MQL5-д msgpack DLL импортлох).                |
 //+------------------------------------------------------------------+
 #property copyright "MT5 Test Bot"
-#property version   "0.2"
+#property version   "1.00"
 #property strict
 
-#include <Zmq/Zmq.mqh>
 #include <Trade/Trade.mqh>
 
-input string  PubAddress           = "tcp://127.0.0.1:5555";
-input string  RpcAddress           = "tcp://127.0.0.1:5556";
-input int     HeartbeatSeconds     = 5;
-input int     FlattenOnSilenceS    = 60;
-input bool    AllowExecution       = false;   // false = dry run, no orders
-input string  HmacSecret           = "dev-only-change-me";
+input string  Host                = "127.0.0.1";
+input int     Port                = 5555;
+input int     HeartbeatSeconds    = 5;
+input int     ReconnectSeconds    = 3;
+input int     FlattenOnSilenceS   = 60;
+input bool    AllowExecution      = false;     // false = dry run
 
-Context  *g_ctx       = NULL;
-Socket   *g_pub       = NULL;
-Socket   *g_rpc       = NULL;
-CTrade    g_trade;
-
-datetime g_last_brain_msg_time = 0;
-datetime g_last_heartbeat_sent = 0;
+CTrade   g_trade;
+int      g_sock                   = INVALID_HANDLE;
+datetime g_last_heartbeat_sent    = 0;
+datetime g_last_brain_msg_time    = 0;
+datetime g_last_reconnect_attempt = 0;
+string   g_recv_buffer            = "";
 
 //+------------------------------------------------------------------+
-//| Hex SHA256 — used for HMAC. Trivial wrapper around CryptEncode.  |
+//| Connect (or reconnect) to brain.                                 |
 //+------------------------------------------------------------------+
-string ComputeHmacHex(const string secret, const string body)
+bool ConnectBrain()
 {
-   uchar key[];   StringToCharArray(secret, key, 0, StringLen(secret));
-   uchar data[];  StringToCharArray(body, data, 0, StringLen(body));
-   uchar hash[];
-   if(!CryptEncode(CRYPT_HASH_SHA256, data, key, hash))
-      return "";
-   string hex = "";
-   for(int i = 0; i < ArraySize(hash); i++)
-      hex += StringFormat("%02x", hash[i]);
-   return hex;
-}
-
-//+------------------------------------------------------------------+
-//| Pipe-delimited message builder.                                   |
-//| Returns body with HMAC prepended as "<hex>|<body>".               |
-//+------------------------------------------------------------------+
-string SignedFrame(const string body)
-{
-   string sig = ComputeHmacHex(HmacSecret, body);
-   return sig + "|" + body;
-}
-
-//+------------------------------------------------------------------+
-int OnInit()
-{
-   g_ctx = new Context("bridge_ea");
-   g_pub = new Socket(g_ctx, ZMQ_PUB);
-   if(!g_pub.bind(PubAddress)) {
-      Print("PUB bind failed: ", PubAddress); return INIT_FAILED;
+   if(g_sock != INVALID_HANDLE)
+   {
+      SocketClose(g_sock);
+      g_sock = INVALID_HANDLE;
    }
-   g_rpc = new Socket(g_ctx, ZMQ_REP);
-   if(!g_rpc.bind(RpcAddress)) {
-      Print("RPC bind failed: ", RpcAddress); return INIT_FAILED;
+   g_sock = SocketCreate();
+   if(g_sock == INVALID_HANDLE)
+   {
+      PrintFormat("SocketCreate failed: err=%d", GetLastError());
+      return false;
    }
-   g_rpc.setLinger(0);
-   g_pub.setLinger(0);
+   if(!SocketConnect(g_sock, Host, Port, 1000))
+   {
+      PrintFormat("SocketConnect %s:%d failed: err=%d", Host, Port, GetLastError());
+      SocketClose(g_sock);
+      g_sock = INVALID_HANDLE;
+      return false;
+   }
    g_last_brain_msg_time = TimeCurrent();
-   EventSetTimer(1);
-   PrintFormat("bridge_ea up  pub=%s rpc=%s exec=%s",
-               PubAddress, RpcAddress, (string)AllowExecution);
-   return INIT_SUCCEEDED;
+   PrintFormat("connected to brain at %s:%d", Host, Port);
+   return true;
 }
 
 //+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
-   EventKillTimer();
-   if(g_pub) { delete g_pub; g_pub = NULL; }
-   if(g_rpc) { delete g_rpc; g_rpc = NULL; }
-   if(g_ctx) { delete g_ctx; g_ctx = NULL; }
-}
-
+//| Send a single line (\n appended). Non-blocking-friendly.         |
 //+------------------------------------------------------------------+
-void OnTick()
+bool SendLine(const string body)
 {
-   string sym = _Symbol;
-   MqlTick t;
-   if(!SymbolInfoTick(sym, t)) return;
-
-   long ts_ms = (long)(t.time_msc);
-   string body = StringFormat(
-      "tick|symbol=%s|bid=%.5f|ask=%.5f|ts_ms=%I64d|volume=%I64d",
-      sym, t.bid, t.ask, ts_ms, (long)t.volume);
-
-   ZmqMsg msg(SignedFrame(body));
-   g_pub.send(msg, true);   // true = non-blocking
-}
-
-//+------------------------------------------------------------------+
-void OnTimer()
-{
-   datetime now = TimeCurrent();
-
-   // 1. Heartbeat
-   if(now - g_last_heartbeat_sent >= HeartbeatSeconds)
+   if(g_sock == INVALID_HANDLE) return false;
+   string line = body + "\n";
+   uchar bytes[];
+   int n = StringToCharArray(line, bytes, 0, StringLen(line), CP_UTF8);
+   if(n <= 0) return false;
+   uint sent = SocketSend(g_sock, bytes, n - 1);  // -1 to drop NUL terminator
+   if(sent == 0)
    {
-      string body = StringFormat("heartbeat|ts_ms=%I64d|source=gateway",
-                                 (long)now * 1000);
-      ZmqMsg hb(SignedFrame(body));
-      g_pub.send(hb, true);
-      g_last_heartbeat_sent = now;
+      PrintFormat("SocketSend failed: err=%d", GetLastError());
+      SocketClose(g_sock);
+      g_sock = INVALID_HANDLE;
+      return false;
+   }
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Drain socket into g_recv_buffer; return any complete lines.      |
+//+------------------------------------------------------------------+
+void DrainSocket()
+{
+   if(g_sock == INVALID_HANDLE) return;
+   uint avail = SocketIsReadable(g_sock);
+   while(avail > 0)
+   {
+      uchar buf[];
+      int got = SocketRead(g_sock, buf, avail, 50);
+      if(got <= 0) break;
+      string chunk = CharArrayToString(buf, 0, got, CP_UTF8);
+      g_recv_buffer += chunk;
+      avail = SocketIsReadable(g_sock);
    }
 
-   // 2. Drain RPC requests (orders)
-   ZmqMsg req;
-   while(g_rpc.recv(req, true))   // non-blocking
+   // Process all complete lines
+   int nl = StringFind(g_recv_buffer, "\n");
+   while(nl >= 0)
    {
-      string raw = req.getData();
-      g_last_brain_msg_time = now;
-      string reply = HandleRpc(raw);
-      ZmqMsg rep(reply);
-      g_rpc.send(rep, true);
-   }
-
-   // 3. Heartbeat-loss watchdog
-   if(now - g_last_brain_msg_time > FlattenOnSilenceS)
-   {
-      static datetime last_log = 0;
-      if(now - last_log > 30) {
-         Print("WATCHDOG: brain silent ", now - g_last_brain_msg_time, "s — flattening");
-         last_log = now;
+      string line = StringSubstr(g_recv_buffer, 0, nl);
+      g_recv_buffer = StringSubstr(g_recv_buffer, nl + 1);
+      // strip trailing \r
+      if(StringLen(line) > 0 && StringGetCharacter(line, StringLen(line) - 1) == 13)
+         line = StringSubstr(line, 0, StringLen(line) - 1);
+      if(StringLen(line) > 0)
+      {
+         g_last_brain_msg_time = TimeCurrent();
+         string reply = HandleLine(line);
+         if(StringLen(reply) > 0)
+            SendLine(reply);
       }
-      FlattenAll();
+      nl = StringFind(g_recv_buffer, "\n");
    }
 }
 
 //+------------------------------------------------------------------+
-//| Parse "<sig>|<body>", verify HMAC, dispatch.                     |
-//| Reply format: "ok|key=val|..." or "err|reason=..."                |
+//| Parse "type|k=v|..." line.                                       |
 //+------------------------------------------------------------------+
-string HandleRpc(const string raw)
+string HandleLine(const string line)
 {
-   int sep = StringFind(raw, "|");
-   if(sep < 0) return "err|reason=malformed";
-   string sig  = StringSubstr(raw, 0, sep);
-   string body = StringSubstr(raw, sep + 1);
-   if(ComputeHmacHex(HmacSecret, body) != sig)
-      return "err|reason=hmac";
-
-   // body format: "type|k=v|..."  e.g. "order|client_id=...|symbol=EURUSD|side=buy|lots=0.10|sl=1.0950|tp=1.1100|entry=1.1000"
    string parts[];
-   int n = StringSplit(body, '|', parts);
+   int n = StringSplit(line, '|', parts);
    if(n < 1) return "err|reason=empty";
    string mtype = parts[0];
-
    if(mtype == "order")        return ExecuteOrder(parts);
    if(mtype == "flatten_all")  { FlattenAll(); return "ok|action=flatten"; }
    if(mtype == "ping")         return "ok|pong=1";
-   return "err|reason=unknown_type";
+   return "err|reason=unknown_type:" + mtype;
 }
 
 //+------------------------------------------------------------------+
@@ -209,7 +173,6 @@ string ExecuteOrder(const string &parts[])
    double lots      = StringToDouble(GetField(parts, "lots"));
    double sl        = StringToDouble(GetField(parts, "sl"));
    double tp        = StringToDouble(GetField(parts, "tp"));
-   // entry хадгалагдаагүй — market order гэж тооцно
 
    if(!AllowExecution)
    {
@@ -221,11 +184,10 @@ string ExecuteOrder(const string &parts[])
    bool ok = false;
    if(side == "buy")       ok = g_trade.Buy(lots, symbol, 0, sl, tp, client_id);
    else if(side == "sell") ok = g_trade.Sell(lots, symbol, 0, sl, tp, client_id);
-   else return "err|reason=bad_side";
+   else return "err|reason=bad_side|client_id=" + client_id;
 
-   if(!ok) return StringFormat("err|reason=trade_failed|retcode=%d",
-                               g_trade.ResultRetcode());
-
+   if(!ok) return StringFormat("err|reason=trade_failed|retcode=%d|client_id=%s",
+                               g_trade.ResultRetcode(), client_id);
    return StringFormat("ok|ticket=%I64u|price=%.5f|client_id=%s",
                        g_trade.ResultOrder(), g_trade.ResultPrice(), client_id);
 }
@@ -238,6 +200,80 @@ void FlattenAll()
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
       g_trade.PositionClose(ticket);
+   }
+}
+
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   ConnectBrain();   // best-effort; OnTimer will retry
+   EventSetTimer(1);
+   PrintFormat("bridge_ea up  host=%s port=%d exec=%s", Host, Port, (string)AllowExecution);
+   return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   EventKillTimer();
+   if(g_sock != INVALID_HANDLE)
+   {
+      SocketClose(g_sock);
+      g_sock = INVALID_HANDLE;
+   }
+}
+
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   if(g_sock == INVALID_HANDLE) return;
+   string sym = _Symbol;
+   MqlTick t;
+   if(!SymbolInfoTick(sym, t)) return;
+   long ts_ms = (long)(t.time_msc);
+   string body = StringFormat(
+      "tick|symbol=%s|bid=%.5f|ask=%.5f|ts_ms=%I64d|volume=%I64d",
+      sym, t.bid, t.ask, ts_ms, (long)t.volume);
+   SendLine(body);
+}
+
+//+------------------------------------------------------------------+
+void OnTimer()
+{
+   datetime now = TimeCurrent();
+
+   // 1. (Re)connect if disconnected
+   if(g_sock == INVALID_HANDLE)
+   {
+      if(now - g_last_reconnect_attempt >= ReconnectSeconds)
+      {
+         g_last_reconnect_attempt = now;
+         ConnectBrain();
+      }
+      return;
+   }
+
+   // 2. Drain & dispatch
+   DrainSocket();
+
+   // 3. Heartbeat
+   if(now - g_last_heartbeat_sent >= HeartbeatSeconds)
+   {
+      string body = StringFormat("heartbeat|ts_ms=%I64d|source=gateway",
+                                 (long)now * 1000);
+      SendLine(body);
+      g_last_heartbeat_sent = now;
+   }
+
+   // 4. Watchdog — flatten on prolonged brain silence
+   if(now - g_last_brain_msg_time > FlattenOnSilenceS)
+   {
+      static datetime last_log = 0;
+      if(now - last_log > 30) {
+         PrintFormat("WATCHDOG: brain silent %ds — flattening", now - g_last_brain_msg_time);
+         last_log = now;
+      }
+      FlattenAll();
    }
 }
 //+------------------------------------------------------------------+
