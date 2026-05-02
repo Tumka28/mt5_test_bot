@@ -17,8 +17,27 @@
 - VPS дээр deploy хийхдээ broker-ийн VPS-д DLL imports блоклогдсон эсэхийг
   шалга. Block байвал custom DLL биш TCP forwarder сонгох ёстой.
 
-## Дараагийн алхам
+## Wire format (одоогийн хувилбар)
 
-`OnTick`, `ExecuteOrder`, `FlattenAll` доторх `// TODO`-уудыг бөглө.
-HMAC + msgpack нь Python тал дээртэй адил байх ёстой —
-`bridge/transport.py`-аас format-аа авна.
+MT5 ↔ Python хооронд **pipe-delimited string** + HMAC-SHA256 hex prefix
+ашигладаг (msgpack-ийг MQL5-д бичих хэцүү учир). Format:
+
+```
+<hmac_hex>|<body>
+body = "<type>|<k1>=<v1>|<k2>=<v2>|..."
+```
+
+Жишээ: `tick|symbol=EURUSD|bid=1.10412|ask=1.10421|ts_ms=1735776000123|volume=0`.
+
+Python тал нь `bridge/transport.py`-ийн msgpack frame-ийн оронд энэ format-ыг
+parse хийх ёстой. Хожим msgpack DLL (https://github.com/msgpack/msgpack-c)
+импортлох замаар сольж болно.
+
+## Үлдсэн TODO
+
+1. **Python тал MQL5-ийн pipe format-ыг parse хийх adapter** —
+   `bridge/transport.py`-д `decode_pipe(frame)` нэмэх (хагас үлдсэн).
+2. **Order execution acknowledgement back-channel** — fill price-ийг
+   journal руу буцаах ёстой (одоо RPC reply-аар буцаагдаж байна, гэхдээ
+   Python тал дахь RPC client одоогоор бичигдээгүй).
+3. **Live test** — VPS дээр paper acct-аар 4 долоо хоног.
