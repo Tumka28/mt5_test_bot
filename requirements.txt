@@ -1,0 +1,21 @@
+# Core
+pyzmq>=25.0
+msgpack>=1.0
+pyyaml>=6.0
+pydantic>=2.0
+
+# MT5 (Windows only — pip install no-op on Linux)
+MetaTrader5>=5.0.45 ; sys_platform == "win32"
+
+# Persistence
+pandas>=2.0
+pyarrow>=14.0
+
+# Observability
+structlog>=24.0
+prometheus-client>=0.19
+
+# Test
+pytest>=7.4
+pytest-asyncio>=0.21
+freezegun>=1.4

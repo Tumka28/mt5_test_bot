@@ -1,0 +1,32 @@
+# Symbol metadata — contract size, min lot, correlation cluster, etc.
+# Backtest-д ч, live-д ч энэ файлаас уншина.
+
+EURUSD:
+  contract_size: 100000
+  min_lot: 0.01
+  lot_step: 0.01
+  pip_value_usd: 10.0     # per 1.0 standard lot
+  cluster: "USD_MAJORS"
+  typical_spread_pips: 0.6
+
+GBPUSD:
+  contract_size: 100000
+  min_lot: 0.01
+  lot_step: 0.01
+  pip_value_usd: 10.0
+  cluster: "USD_MAJORS"
+  typical_spread_pips: 0.9
+
+XAUUSD:
+  contract_size: 100        # ounces per lot
+  min_lot: 0.01
+  lot_step: 0.01
+  pip_value_usd: 1.0        # per 0.01 price move per 1.0 lot
+  cluster: "METALS"
+  typical_spread_pips: 20.0
+
+# Cluster definitions — Risk Manager correlation cap-д ашиглана
+_clusters:
+  USD_MAJORS: ["EURUSD", "GBPUSD", "AUDUSD", "NZDUSD"]
+  METALS: ["XAUUSD", "XAGUSD"]
+  INDICES: ["US30", "NAS100", "SPX500"]

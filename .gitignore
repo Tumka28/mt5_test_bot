@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# runtime data
+data/
+*.parquet
+*.sqlite
+*.sqlite-journal
+*.log
+*.jsonl
+
+# secrets
+.env
+config/secrets.yaml
+
+# editor
+.vscode/
+.idea/
