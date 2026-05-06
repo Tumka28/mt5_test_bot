@@ -21,31 +21,46 @@ Offline lane:
 
 Дэлгэрэнгүй: `docs/architecture.md` (хожим нэмэгдэнэ).
 
-## Quick start
+## Quick start (1 script)
 
+**Windows:**
+```bat
+:: First run does setup + paper mode automatically
+start.bat
+
+:: Subcommands
+start.bat install-ea         REM bridge_ea.mq5-ыг MT5 MQL5\Experts хавтсанд хуулна
+start.bat preflight          REM config + env шалгана
+start.bat test               REM бүх pytest
+start.bat e2e                REM end-to-end smoke (fake EA ↔ brain)
+start.bat live --lots 0.01   REM real money (env var-ууд тохируулсан байх ёстой)
+```
+
+**Linux/WSL:**
 ```bash
-# 1. virtualenv
-python -m venv .venv && .venv\Scripts\activate
+./start.sh                   # paper mode
+./start.sh install-ea --mt5-data-path "/mnt/c/.../MQL5"
+./start.sh test
+./start.sh live --lots 0.01
+```
 
-# 2. dependencies (pinned)
-pip install -r requirements.txt
+**Гар ажиллуулах (хэрвээ wrapper-уудыг алгасах бол):**
+```bash
+python run.py setup          # venv + deps
+python run.py install-ea     # EA-г MT5 руу хуулна
+python run.py preflight --mode paper
+python run.py test
+python run.py paper --symbol EURUSD --lots 0.01
+python run.py live --symbol EURUSD --lots 0.01     # env var заавал
+```
 
-# 3. smoke tests (no MT5 required)
-pytest tests/ -v
-
-# 4. preflight check
-python scripts/preflight.py --mode paper
-
-# 5. paper mode (демо MT5 акаунт + bridge_ea.mq5 chart-д attached)
-python scripts/run_trading.py --symbol EURUSD --mode paper
-
-# 6. live (зөвхөн 4 долоо хоног paper test амжилттай дууссаны дараа!)
-export MT5BOT_HMAC=$(openssl rand -hex 32)
-export MT5BOT_HELLO_TOKEN=$(openssl rand -hex 16)
-export MT5BOT_ALLOWED_LOGINS=12345,67890
-export MT5BOT_I_KNOW_THIS_IS_REAL_MONEY=yes
-export MT5BOT_STRICT=1
-python scripts/run_trading.py --symbol EURUSD --mode live --lots 0.01
+**Live горимд env var-ууд (`MT5BOT_*`) заавал:**
+```
+MT5BOT_HMAC=<≥32 char hex>            # bridge layer secret
+MT5BOT_HELLO_TOKEN=<≥16 char hex>     # EA-ийн HelloToken-той ижил
+MT5BOT_ALLOWED_LOGINS=12345,67890     # MT5 account login allow-list
+MT5BOT_STRICT=1                       # secret default-уудыг таслана
+MT5BOT_I_KNOW_THIS_IS_REAL_MONEY=yes  # confirm
 ```
 
 ## Deployment funnel (хатуу мөрдөнө)
