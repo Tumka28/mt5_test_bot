@@ -41,6 +41,7 @@ input int     PositionsPushSeconds = 3;       // positions snapshot refresh
 input int     ReconnectSeconds     = 3;
 input int     FlattenOnSilenceS    = 60;
 input bool    AllowExecution       = false;   // false = dry run; true = LIVE!
+input string  HelloToken           = "";      // optional shared token; brain l mednE
 
 CTrade   g_trade;
 int      g_sock                   = INVALID_HANDLE;
@@ -52,6 +53,19 @@ datetime g_last_reconnect_attempt = 0;
 string   g_recv_buffer            = "";
 double   g_day_start_balance      = 0.0;
 datetime g_day_start_date         = 0;
+
+//+------------------------------------------------------------------+
+//| Determine account_type — demo/real/contest. Forward-declared so   |
+//| ConnectBrain()-аас дуудаж болно.                                  |
+//+------------------------------------------------------------------+
+string AccountTypeStr()
+{
+   long mode = AccountInfoInteger(ACCOUNT_TRADE_MODE);
+   if(mode == ACCOUNT_TRADE_MODE_DEMO)    return "demo";
+   if(mode == ACCOUNT_TRADE_MODE_CONTEST) return "contest";
+   if(mode == ACCOUNT_TRADE_MODE_REAL)    return "real";
+   return "unknown";
+}
 
 //+------------------------------------------------------------------+
 bool ConnectBrain()
@@ -76,6 +90,15 @@ bool ConnectBrain()
    }
    g_last_brain_msg_time = TimeCurrent();
    PrintFormat("connected to brain at %s:%d", Host, Port);
+   // Send a "hello" line first so brain knows account info immediately.
+   string hello = StringFormat(
+      "hello|account_type=%s|login=%I64d|server=%s|build=%d|token=%s",
+      AccountTypeStr(),
+      AccountInfoInteger(ACCOUNT_LOGIN),
+      AccountInfoString(ACCOUNT_SERVER),
+      (int)TerminalInfoInteger(TERMINAL_BUILD),
+      HelloToken);
+   SendLine(hello);
    return true;
 }
 
@@ -140,6 +163,7 @@ string HandleLine(const string line)
    string mtype = parts[0];
    if(mtype == "order")        return ExecuteOrder(parts);
    if(mtype == "flatten_all")  { FlattenAll(); return "ok|action=flatten"; }
+   if(mtype == "kill_all")     { FlattenAll(); return "ok|action=kill"; }
    if(mtype == "ping")         return "ok|pong=1";
    return "err|reason=unknown_type:" + mtype;
 }
@@ -211,10 +235,13 @@ void PushAccount()
    double balance  = AccountInfoDouble(ACCOUNT_BALANCE);
    double pnl_today = balance - g_day_start_balance;
    string ccy = AccountInfoString(ACCOUNT_CURRENCY);
+   string acct_type = AccountTypeStr();
+   long login = AccountInfoInteger(ACCOUNT_LOGIN);
+   string server = AccountInfoString(ACCOUNT_SERVER);
    long ts_ms = (long)TimeCurrent() * 1000;
    string body = StringFormat(
-      "account|equity=%.2f|balance=%.2f|currency=%s|pnl_today=%.2f|ts_ms=%I64d",
-      equity, balance, ccy, pnl_today, ts_ms);
+      "account|equity=%.2f|balance=%.2f|currency=%s|pnl_today=%.2f|account_type=%s|login=%I64d|server=%s|ts_ms=%I64d",
+      equity, balance, ccy, pnl_today, acct_type, login, server, ts_ms);
    SendLine(body);
 }
 

@@ -22,12 +22,25 @@ import msgpack
 # encode/decode don't require the native pyzmq build.
 
 
+_DEV_DEFAULT = "dev-only-change-me"
+
+
 def _hmac_secret() -> bytes:
     secret = os.environ.get("MT5BOT_HMAC", "")
     if not secret:
+        if os.environ.get("MT5BOT_STRICT", "").lower() in ("1", "true", "yes"):
+            raise RuntimeError(
+                "MT5BOT_HMAC env var must be set when MT5BOT_STRICT=1 "
+                "(production / shadow / live mode)"
+            )
         # Dev default — replace in prod via env var.
-        secret = "dev-only-change-me"
+        secret = _DEV_DEFAULT
     return secret.encode("utf-8")
+
+
+def is_dev_secret() -> bool:
+    """True хэрвээ HMAC дев default-аар явж байгаа бол. Preflight ашиглана."""
+    return os.environ.get("MT5BOT_HMAC", "") in ("", _DEV_DEFAULT)
 
 
 def encode(payload: dict) -> bytes:

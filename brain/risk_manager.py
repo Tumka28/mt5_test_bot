@@ -68,16 +68,29 @@ class NewsCalendar:
         self._events.setdefault(symbol, []).append((ts_ms, window_minutes))
 
     def has_high_impact_within(self, symbol: str, *, now_ms: int, minutes: int) -> bool:
-        # symbol-д шууд + currency-аар дамжсан шалгалт (USD news EURUSD-д нөлөөлнө)
+        # Direct symbol + бүх 3-үсэгт currency component (FX pair "EURUSD" ⇒ EUR + USD).
         candidates = list(self._events.get(symbol, []))
-        # USD-той pair бол USD events-ийг ч авна
-        if "USD" in symbol:
-            candidates += self._events.get("USD", [])
+        for ccy in self._currency_components(symbol):
+            candidates += self._events.get(ccy, [])
         for ev_ts, win in candidates:
             window = max(win, minutes) * 60_000
             if abs(now_ms - ev_ts) <= window:
                 return True
         return False
+
+    @staticmethod
+    def _currency_components(symbol: str) -> list[str]:
+        """Extract 3-letter currency codes from a typical FX symbol.
+
+        EURUSD → ["EUR", "USD"]; XAUUSD → ["XAU", "USD"]; US30 → []
+        Бид зөвхөн 6-үсэгт цэвэр буюу 6+suffix хувилбарыг таамаглаж байна.
+        Index/CFD-уудад currency code тааруулах нь утга багатай тул хоосон.
+        """
+        # strip common broker suffixes (".m", "_pro", etc.)
+        head = symbol.split(".")[0].split("_")[0].upper()
+        if len(head) >= 6 and head[:6].isalpha():
+            return [head[0:3], head[3:6]]
+        return []
 
 
 class RiskManager:

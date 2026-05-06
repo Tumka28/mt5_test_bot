@@ -35,3 +35,19 @@ def test_secret_mismatch_rejected():
     os.environ["MT5BOT_HMAC"] = "secret-B"
     with pytest.raises(ValueError):
         decode(frame)
+
+
+def test_strict_mode_requires_env_var(monkeypatch):
+    """STRICT mode-д MT5BOT_HMAC env var заавал тохируулсан байх ёстой."""
+    monkeypatch.delenv("MT5BOT_HMAC", raising=False)
+    monkeypatch.setenv("MT5BOT_STRICT", "1")
+    with pytest.raises(RuntimeError, match="MT5BOT_HMAC"):
+        encode({"x": 1})
+
+
+def test_is_dev_secret_detects_default(monkeypatch):
+    from bridge.transport import is_dev_secret
+    monkeypatch.delenv("MT5BOT_HMAC", raising=False)
+    assert is_dev_secret() is True
+    monkeypatch.setenv("MT5BOT_HMAC", "real-prod-key-that-is-not-default")
+    assert is_dev_secret() is False

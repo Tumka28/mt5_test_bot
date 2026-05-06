@@ -1,21 +1,24 @@
-# Core
-pyzmq>=25.0
-msgpack>=1.0
-pyyaml>=6.0
-pydantic>=2.0
+# MT5 Test Bot — pinned runtime dependencies.
+# Шинэчлэхдээ ажилласан тестүүдийг дахин run хийж батал.
 
-# MT5 (Windows only — pip install no-op on Linux)
-MetaTrader5>=5.0.45 ; sys_platform == "win32"
+# Core
+pyzmq==26.2.0
+msgpack==1.1.0
+pyyaml==6.0.2
+pydantic==2.9.2
+
+# MT5 binding (Windows only — pip install no-op on Linux)
+MetaTrader5==5.0.45 ; sys_platform == "win32"
 
 # Persistence
-pandas>=2.0
-pyarrow>=14.0
+pandas==2.2.3
+pyarrow==17.0.0
 
 # Observability
-structlog>=24.0
-prometheus-client>=0.19
+structlog==24.4.0
+prometheus-client==0.21.0
 
 # Test
-pytest>=7.4
-pytest-asyncio>=0.21
-freezegun>=1.4
+pytest==8.3.3
+pytest-asyncio==0.24.0
+freezegun==1.5.1
