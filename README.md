@@ -21,19 +21,33 @@ Offline lane:
 
 Дэлгэрэнгүй: `docs/architecture.md` (хожим нэмэгдэнэ).
 
-## Quick start (1 script)
+## Хоёр горим
 
-**Windows:**
+| Горим | Python brain | MT5 EA | Тайлбар |
+|---|---|---|---|
+| **Standalone** (хамгийн хялбар) | ❌ хэрэггүй | `SmcVisualEA.mq5` | MetaEditor 5-д compile, chart-руу drag — SMC + projection + (сонголтоор) auto-trade |
+| **Brain-controlled** | ✅ Python brain | `bridge_ea.mq5` | Python тал дээр strategy/risk/journal, EA нь thin pipe |
+
+### Standalone горим (Python шаардахгүй):
+```bat
+start.bat install-ea --ea SmcVisualEA      REM SmcVisualEA.mq5-г MT5 хавтсанд хуулна
+:: MT5: F4 → MetaEditor → Compile, EURUSD chart-руу EA drag
+:: Inputs: InpAutoTrade=false (default — зөвхөн зурна),
+::         InpProbThreshold=0.68 (auto-trade-нд хэрэгтэй магадлал)
+```
+
+### Brain-controlled горим:
 ```bat
 :: First run does setup + paper mode automatically
 start.bat
 
 :: Subcommands
-start.bat install-ea         REM bridge_ea.mq5-ыг MT5 MQL5\Experts хавтсанд хуулна
-start.bat preflight          REM config + env шалгана
-start.bat test               REM бүх pytest
-start.bat e2e                REM end-to-end smoke (fake EA ↔ brain)
-start.bat live --lots 0.01   REM real money (env var-ууд тохируулсан байх ёстой)
+start.bat install-ea --ea bridge_ea  REM Python brain-тэй ажилладаг thin EA
+start.bat preflight                   REM config + env шалгана
+start.bat test                        REM бүх pytest
+start.bat e2e                         REM end-to-end smoke (fake EA ↔ brain)
+start.bat smc --symbol EURUSD --tf M5 REM brain-аас SMC analysis + chart drawing
+start.bat live --lots 0.01            REM real money (env var-ууд тохируулсан)
 ```
 
 **Linux/WSL:**

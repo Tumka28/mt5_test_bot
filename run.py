@@ -70,13 +70,26 @@ def cmd_setup(_: argparse.Namespace) -> int:
 
 
 def cmd_install_ea(args: argparse.Namespace) -> int:
-    """bridge_ea.mq5-ыг MT5-ийн MQL5/Experts хавтсанд хуулна.
+    """EA файлыг MT5-ийн MQL5/Experts хавтсанд хуулна.
 
-    --mt5-data-path PATH   — гар тохируулга, дараах env-аас уншина:
-                              MT5_DATA_PATH    (e.g. C:\\Users\\X\\AppData\\Roaming\\MetaQuotes\\Terminal\\<id>\\MQL5)
-    Хэрэв байхгүй бол default Windows зам дээр хайна.
+    --ea EA_NAME     — аль EA-г хуулах (default `SmcVisualEA`):
+                          SmcVisualEA  — all-in-one MQL5 (Python шаардахгүй)
+                          bridge_ea    — Python brain-тэй ажилладаг thin EA
+                          SMC_Pure_EA  — XAUUSD safe EA (legacy)
+    --mt5-data-path PATH — гар тохируулга, эсвэл MT5_DATA_PATH env var.
+                          Default Windows зам дээр хайна.
     """
-    src = ROOT / "ea" / "bridge_ea.mq5"
+    ea_filename_map = {
+        "SmcVisualEA": "SmcVisualEA.mq5",
+        "bridge_ea":   "bridge_ea.mq5",
+        "SMC_Pure_EA": "SMC_Pure_EA.mq5",
+    }
+    ea_name = getattr(args, "ea", None) or "SmcVisualEA"
+    fname = ea_filename_map.get(ea_name)
+    if fname is None:
+        print(f"ERROR: unknown EA {ea_name!r}; choose: {list(ea_filename_map)}", file=sys.stderr)
+        return 1
+    src = ROOT / "ea" / fname
     if not src.exists():
         print(f"ERROR: source not found: {src}", file=sys.stderr)
         return 1
@@ -115,10 +128,20 @@ def cmd_install_ea(args: argparse.Namespace) -> int:
     shutil.copy2(src, dest)
     print(f"copied: {src}\n     →  {dest}")
     print("\nДараа нь MT5-д:")
-    print("  1. F4 → MetaEditor → File → Compile  (эсвэл Navigator-аас зөв click → Refresh)")
+    print("  1. F4 → MetaEditor → File → Compile (эсвэл Navigator → Refresh)")
     print("  2. Symbol chart-руу EA drag-drop")
-    print("  3. Inputs: AllowExecution=false (paper test үед), HelloToken=<env-той ижил>")
-    print("  4. Tools → Options → Expert Advisors → Allow algorithmic trading")
+    if ea_name == "SmcVisualEA":
+        print("  3. Inputs: InpAutoTrade=false (анх удаа visualization-only)")
+        print("            InpProbThreshold=0.68 (ihээр shal-amd дээ)")
+        print("  4. Tools → Options → Expert Advisors → Allow algorithmic trading")
+        print("  5. Python brain ШААРДЛАГАГҮЙ — энэ EA дангаар ажилна.")
+    elif ea_name == "bridge_ea":
+        print("  3. Inputs: AllowExecution=false (paper test үед), HelloToken=<env-той ижил>")
+        print("  4. Tools → Options → Expert Advisors → Allow algorithmic trading")
+        print("  5. Python brain ажиллуулна:  start.bat paper / shadow / live")
+    else:
+        print("  3. Inputs-ийг symbol-той тааруулж тохируул")
+        print("  4. Tools → Options → Expert Advisors → Allow algorithmic trading")
     return 0
 
 
@@ -201,7 +224,10 @@ def main() -> int:
 
     sub.add_parser("setup", help="venv + pip install -r requirements.txt").set_defaults(func=cmd_setup)
 
-    p_ea = sub.add_parser("install-ea", help="copy bridge_ea.mq5 → MT5 MQL5/Experts")
+    p_ea = sub.add_parser("install-ea", help="copy EA → MT5 MQL5/Experts")
+    p_ea.add_argument("--ea", choices=["SmcVisualEA", "bridge_ea", "SMC_Pure_EA"],
+                      default="SmcVisualEA",
+                      help="which EA to install (default SmcVisualEA = all-in-one)")
     p_ea.add_argument("--mt5-data-path", default="")
     p_ea.set_defaults(func=cmd_install_ea)
 
