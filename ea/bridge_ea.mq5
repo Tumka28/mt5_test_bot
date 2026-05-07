@@ -162,9 +162,17 @@ string HandleLine(const string line)
    if(n < 1) return "err|reason=empty";
    string mtype = parts[0];
    if(mtype == "order")        return ExecuteOrder(parts);
+   if(mtype == "modify")       return ModifyPosition(parts);
    if(mtype == "flatten_all")  { FlattenAll(); return "ok|action=flatten"; }
    if(mtype == "kill_all")     { FlattenAll(); return "ok|action=kill"; }
    if(mtype == "ping")         return "ok|pong=1";
+   if(mtype == "draw_zone")    return DrawZone(parts);
+   if(mtype == "draw_line")    return DrawLine(parts);
+   if(mtype == "draw_label")   return DrawLabel(parts);
+   if(mtype == "draw_arrow")   return DrawArrow(parts);
+   if(mtype == "draw_path")    return DrawPath(parts);
+   if(mtype == "clear")        return ClearByPrefix(parts);
+   if(mtype == "get_bars")     return SendBars(parts);
    return "err|reason=unknown_type:" + mtype;
 }
 
@@ -207,6 +215,258 @@ string ExecuteOrder(const string &parts[])
                                g_trade.ResultRetcode(), client_id);
    return StringFormat("ok|ticket=%I64u|price=%.5f|client_id=%s",
                        g_trade.ResultOrder(), g_trade.ResultPrice(), client_id);
+}
+
+//+------------------------------------------------------------------+
+//| Modify position SL/TP — brain-аас trail хийдэг                    |
+//+------------------------------------------------------------------+
+string ModifyPosition(const string &parts[])
+{
+   ulong ticket = (ulong)StringToInteger(GetField(parts, "ticket"));
+   double sl    = StringToDouble(GetField(parts, "sl"));
+   double tp    = StringToDouble(GetField(parts, "tp"));
+   if(!AllowExecution)
+      return StringFormat("ok|dry_run=1|ticket=%I64u", ticket);
+   if(!PositionSelectByTicket(ticket))
+      return StringFormat("err|reason=position_not_found|ticket=%I64u", ticket);
+   bool ok = g_trade.PositionModify(ticket, sl, tp);
+   if(!ok) return StringFormat("err|reason=modify_failed|retcode=%d|ticket=%I64u",
+                               g_trade.ResultRetcode(), ticket);
+   return StringFormat("ok|action=modify|ticket=%I64u|sl=%.5f|tp=%.5f", ticket, sl, tp);
+}
+
+//+------------------------------------------------------------------+
+//|             ─── chart drawing primitives ───                      |
+//| Бүх объектын name brain-аас өгсөн тогтмол ID байх ёстой —         |
+//| ижил нэртэй object-ыг update хийнэ (delete + create).             |
+//+------------------------------------------------------------------+
+color ParseColor(const string raw, const color fallback)
+{
+   if(StringLen(raw) == 0) return fallback;
+   long v = StringToInteger(raw);
+   return (color)v;
+}
+
+void RecreateObject(const string name, const ENUM_OBJECT type)
+{
+   if(ObjectFind(0, name) >= 0)
+      ObjectDelete(0, name);
+   // Caller will ObjectCreate next.
+}
+
+string DrawZone(const string &parts[])
+{
+   string name  = GetField(parts, "name");
+   long t1_ms   = StringToInteger(GetField(parts, "t1"));
+   double p1    = StringToDouble(GetField(parts, "p1"));
+   long t2_ms   = StringToInteger(GetField(parts, "t2"));
+   double p2    = StringToDouble(GetField(parts, "p2"));
+   color clr    = ParseColor(GetField(parts, "color"), clrDodgerBlue);
+   bool   fill  = (GetField(parts, "fill") == "1");
+   int    width = (int)StringToInteger(GetField(parts, "width"));
+   if(width <= 0) width = 1;
+   if(StringLen(name) == 0) return "err|reason=name_required";
+   datetime t1 = (datetime)(t1_ms / 1000);
+   datetime t2 = (datetime)(t2_ms / 1000);
+   RecreateObject(name, OBJ_RECTANGLE);
+   if(!ObjectCreate(0, name, OBJ_RECTANGLE, 0, t1, p1, t2, p2))
+      return StringFormat("err|reason=create_failed|err=%d|name=%s", GetLastError(), name);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
+   ObjectSetInteger(0, name, OBJPROP_FILL, fill);
+   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   return "ok|name=" + name;
+}
+
+string DrawLine(const string &parts[])
+{
+   string name = GetField(parts, "name");
+   long t1_ms  = StringToInteger(GetField(parts, "t1"));
+   double p1   = StringToDouble(GetField(parts, "p1"));
+   long t2_ms  = StringToInteger(GetField(parts, "t2"));
+   double p2   = StringToDouble(GetField(parts, "p2"));
+   color clr   = ParseColor(GetField(parts, "color"), clrYellow);
+   int    style= (int)StringToInteger(GetField(parts, "style"));   // 0=solid,2=dot,1=dash
+   int    width= (int)StringToInteger(GetField(parts, "width"));
+   if(width <= 0) width = 1;
+   if(StringLen(name) == 0) return "err|reason=name_required";
+   datetime t1 = (datetime)(t1_ms / 1000);
+   datetime t2 = (datetime)(t2_ms / 1000);
+   RecreateObject(name, OBJ_TREND);
+   if(!ObjectCreate(0, name, OBJ_TREND, 0, t1, p1, t2, p2))
+      return StringFormat("err|reason=create_failed|err=%d|name=%s", GetLastError(), name);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
+   ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   return "ok|name=" + name;
+}
+
+string DrawLabel(const string &parts[])
+{
+   string name  = GetField(parts, "name");
+   long t_ms    = StringToInteger(GetField(parts, "t"));
+   double price = StringToDouble(GetField(parts, "p"));
+   string text  = GetField(parts, "text");
+   color clr    = ParseColor(GetField(parts, "color"), clrWhite);
+   string font  = GetField(parts, "font"); if(StringLen(font) == 0) font = "Arial";
+   int size     = (int)StringToInteger(GetField(parts, "size"));
+   if(size <= 0) size = 9;
+   if(StringLen(name) == 0) return "err|reason=name_required";
+   StringReplace(text, "%20", " ");
+   StringReplace(text, "%7C", "|");
+   datetime t   = (datetime)(t_ms / 1000);
+   RecreateObject(name, OBJ_TEXT);
+   if(!ObjectCreate(0, name, OBJ_TEXT, 0, t, price))
+      return StringFormat("err|reason=create_failed|err=%d|name=%s", GetLastError(), name);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetString(0, name, OBJPROP_FONT, font);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   return "ok|name=" + name;
+}
+
+string DrawArrow(const string &parts[])
+{
+   string name  = GetField(parts, "name");
+   long t_ms    = StringToInteger(GetField(parts, "t"));
+   double price = StringToDouble(GetField(parts, "p"));
+   string side  = GetField(parts, "side");
+   color clr    = ParseColor(GetField(parts, "color"), clrAqua);
+   if(StringLen(name) == 0) return "err|reason=name_required";
+   datetime t   = (datetime)(t_ms / 1000);
+   ENUM_OBJECT obj_type = (side == "up") ? OBJ_ARROW_UP : OBJ_ARROW_DOWN;
+   RecreateObject(name, obj_type);
+   if(!ObjectCreate(0, name, obj_type, 0, t, price))
+      return StringFormat("err|reason=create_failed|err=%d|name=%s", GetLastError(), name);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, 3);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   return "ok|name=" + name;
+}
+
+//+------------------------------------------------------------------+
+//| Multi-segment projection path. points field formatted:            |
+//|   t1,p1;t2,p2;t3,p3;...                                           |
+//| name-base дотор segment index-аар нэр өгнө: name_0, name_1, ...   |
+//+------------------------------------------------------------------+
+string DrawPath(const string &parts[])
+{
+   string name  = GetField(parts, "name");
+   string raw   = GetField(parts, "points");
+   color clr    = ParseColor(GetField(parts, "color"), clrAqua);
+   int style    = (int)StringToInteger(GetField(parts, "style"));
+   int width    = (int)StringToInteger(GetField(parts, "width"));
+   if(width <= 0) width = 2;
+   if(StringLen(name) == 0 || StringLen(raw) == 0) return "err|reason=missing_args";
+
+   string segs[];
+   int n = StringSplit(raw, ';', segs);
+   if(n < 2) return "err|reason=need_at_least_2_points";
+
+   // Cleanup any previous segments belonging to this path
+   string prev_prefix = name + "_seg_";
+   for(int i = ObjectsTotal(0) - 1; i >= 0; i--)
+   {
+      string objn = ObjectName(0, i);
+      if(StringFind(objn, prev_prefix) == 0)
+         ObjectDelete(0, objn);
+   }
+
+   long   prev_t = 0;
+   double prev_p = 0.0;
+   bool   first  = true;
+   int seg_idx = 0;
+   for(int i = 0; i < n; i++)
+   {
+      string pair[];
+      if(StringSplit(segs[i], ',', pair) < 2) continue;
+      long   ti = StringToInteger(pair[0]);
+      double pi = StringToDouble(pair[1]);
+      if(!first)
+      {
+         string seg_name = StringFormat("%s%d", prev_prefix, seg_idx++);
+         datetime t1 = (datetime)(prev_t / 1000);
+         datetime t2 = (datetime)(ti / 1000);
+         if(ObjectCreate(0, seg_name, OBJ_TREND, 0, t1, prev_p, t2, pi))
+         {
+            ObjectSetInteger(0, seg_name, OBJPROP_COLOR, clr);
+            ObjectSetInteger(0, seg_name, OBJPROP_STYLE, style);
+            ObjectSetInteger(0, seg_name, OBJPROP_WIDTH, width);
+            ObjectSetInteger(0, seg_name, OBJPROP_RAY_RIGHT, false);
+            ObjectSetInteger(0, seg_name, OBJPROP_SELECTABLE, false);
+         }
+      }
+      prev_t = ti; prev_p = pi; first = false;
+   }
+   return StringFormat("ok|name=%s|segments=%d", name, seg_idx);
+}
+
+//+------------------------------------------------------------------+
+//| Delete all objects whose name starts with `prefix`.               |
+//+------------------------------------------------------------------+
+string ClearByPrefix(const string &parts[])
+{
+   string prefix = GetField(parts, "prefix");
+   if(StringLen(prefix) == 0) return "err|reason=prefix_required";
+   int removed = 0;
+   for(int i = ObjectsTotal(0) - 1; i >= 0; i--)
+   {
+      string objn = ObjectName(0, i);
+      if(StringFind(objn, prefix) == 0)
+      {
+         ObjectDelete(0, objn);
+         removed++;
+      }
+   }
+   return StringFormat("ok|cleared=%d", removed);
+}
+
+//+------------------------------------------------------------------+
+//| Send N bars of OHLC history. Reply format:                        |
+//|   bars|req_id=...|symbol=...|tf=...|count=...|data=t,o,h,l,c,v;...|
+//+------------------------------------------------------------------+
+ENUM_TIMEFRAMES TimeframeFromString(const string s)
+{
+   if(s == "M1")  return PERIOD_M1;
+   if(s == "M5")  return PERIOD_M5;
+   if(s == "M15") return PERIOD_M15;
+   if(s == "M30") return PERIOD_M30;
+   if(s == "H1")  return PERIOD_H1;
+   if(s == "H4")  return PERIOD_H4;
+   if(s == "D1")  return PERIOD_D1;
+   if(s == "W1")  return PERIOD_W1;
+   if(s == "MN1") return PERIOD_MN1;
+   return PERIOD_M5;
+}
+
+string SendBars(const string &parts[])
+{
+   string symbol  = GetField(parts, "symbol");
+   string tf_str  = GetField(parts, "tf");
+   int count      = (int)StringToInteger(GetField(parts, "count"));
+   string req_id  = GetField(parts, "req_id");
+   if(count <= 0) count = 200;
+   if(count > 5000) count = 5000;
+   ENUM_TIMEFRAMES tf = TimeframeFromString(tf_str);
+   MqlRates rates[];
+   int got = CopyRates(symbol, tf, 0, count, rates);
+   if(got <= 0)
+      return StringFormat("err|reason=copy_rates_failed|err=%d|req_id=%s", GetLastError(), req_id);
+   string buf = "";
+   for(int i = 0; i < got; i++)
+   {
+      long t_ms = (long)rates[i].time * 1000;
+      buf += StringFormat("%I64d,%.5f,%.5f,%.5f,%.5f,%I64d",
+                          t_ms, rates[i].open, rates[i].high,
+                          rates[i].low, rates[i].close, (long)rates[i].tick_volume);
+      if(i < got - 1) buf += ";";
+   }
+   return StringFormat("bars|req_id=%s|symbol=%s|tf=%s|count=%d|data=%s",
+                       req_id, symbol, tf_str, got, buf);
 }
 
 //+------------------------------------------------------------------+

@@ -171,6 +171,15 @@ def cmd_live(args: argparse.Namespace) -> int:
     return _trade("live", args)
 
 
+def cmd_smc(args: argparse.Namespace) -> int:
+    """SMC advisor — chart дээр projection + zone зурна, trade хийхгүй."""
+    from scripts.run_smc import main as smc_main
+    sys.argv = ["run_smc", "--symbol", args.symbol, "--tf", args.tf,
+                "--bars", str(args.bars), "--period", str(args.period),
+                "--port", str(args.port)]
+    return smc_main()
+
+
 # ─── argparse wiring ──────────────────────────────────────────────────
 
 
@@ -208,6 +217,14 @@ def main() -> int:
         sp = sub.add_parser(name, help=f"start brain in {name} mode")
         _add_trade_args(sp)
         sp.set_defaults(func=fn)
+
+    p_smc = sub.add_parser("smc", help="SMC advisor (zones + projection lines, no trade)")
+    p_smc.add_argument("--symbol", default="EURUSD")
+    p_smc.add_argument("--tf", default="M5", choices=["M1", "M5", "M15", "M30", "H1", "H4", "D1"])
+    p_smc.add_argument("--bars", type=int, default=300)
+    p_smc.add_argument("--period", type=float, default=5.0)
+    p_smc.add_argument("--port", type=int, default=5555)
+    p_smc.set_defaults(func=cmd_smc)
 
     args = p.parse_args()
     return args.func(args)

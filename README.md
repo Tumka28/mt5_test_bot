@@ -54,6 +54,13 @@ python run.py paper --symbol EURUSD --lots 0.01
 python run.py live --symbol EURUSD --lots 0.01     # env var заавал
 ```
 
+**SMC advisor (chart дээр projection line + zone зурна, trade хийхгүй):**
+```bat
+start.bat smc --symbol EURUSD --tf M5
+start.bat smc --symbol XAUUSD --tf M15 --bars 500 --period 10
+```
+EA brain-руу холбогдмогц brain `get_bars` хүсэлт явуулна, хариуг хүлээж аваад chart дээр FVG/Order Block/BOS/CHOCH/projection path/TP1/TP2/structure target/big target/invalidation бүгдийг зурна. Console-д Telegram format-ийн signal text хэвлэгдэнэ.
+
 **Live горимд env var-ууд (`MT5BOT_*`) заавал:**
 ```
 MT5BOT_HMAC=<≥32 char hex>            # bridge layer secret
